@@ -135,7 +135,12 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = false
-        webView.allowsMagnification = true
+        // 触控板双指捏合缩放（magnification）必须关掉：它只放大渲染结果、不重排布局，
+        // 一旦误触（双指斜着滚动时很容易被识别成捏合），页面内容宽度就超出视口，
+        // 表现为底部冒出横向滚动条、整页能左右拖 —— 而菜单「实际大小」(⌘0) 复位的是
+        // pageZoom，碰不到 magnification，于是"怎么复位都不消失、重启才好"。
+        // 需要放大请用「显示」菜单的 ⌘+ / ⌘-（走 pageZoom，会正常重排布局）。
+        webView.allowsMagnification = false
         webView.setValue(false, forKey: "drawsBackground")
         webView.appHost = self
 
@@ -194,6 +199,8 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         let saved = UserDefaults.standard.object(forKey: Self.pageZoomKey) as? Double
         pageZoom = min(max(saved ?? config.pageZoom, Self.minZoom), Self.maxZoom)
         webView.pageZoom = pageZoom
+        // 捏合放大不受 pageZoom 影响，每次起窗一律从 1 开始，避免继承上一轮的状态
+        webView.magnification = 1.0
         if abs(pageZoom - 1.0) > 0.001 {
             logInfo("页面缩放：\(Int((pageZoom * 100).rounded()))%（沿用上次的值）")
         }
@@ -201,7 +208,16 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
 
     func zoomIn() { setPageZoom(pageZoom + 0.1) }
     func zoomOut() { setPageZoom(pageZoom - 0.1) }
-    func resetZoom() { setPageZoom(1.0) }
+
+    /// 「实际大小」：除了 pageZoom，也要把捏合放大归位 —— 否则页面上那条横向
+    /// 滚动条复位不掉（旧版本 `allowsMagnification` 开着时遗留的就是这个状态）。
+    func resetZoom() {
+        setPageZoom(1.0)
+        if abs(webView.magnification - 1.0) > 0.001 {
+            webView.magnification = 1.0
+            logInfo("已复位捏合放大：magnification → 100%")
+        }
+    }
 
     /// 步进 0.1、范围 50%–300%（与 Chrome 的档位观感一致），并把值记住。
     private func setPageZoom(_ value: Double) {
@@ -680,6 +696,45 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         logInfo("界面就绪（\(max(count, 0)) 字符）\(head.map { "内容开头：\($0)" } ?? "")")
         logStartupTiming()
         overlay.hide()
+        // 稍等一拍再自检：遮罩撤掉、前端完成首屏布局之后量到的宽度才准
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.logLayoutSelfCheck()
+        }
+    }
+
+    /// 布局自检（一次性）：把文档宽度/视口宽度/视觉视口缩放记进日志。
+    /// 下次再遇到"莫名多出横向滚动条"时可以直接从日志判定是哪一类：
+    ///   · 文档比视口宽（overflow > 1）→ 是内容真溢出，要查具体元素；
+    ///   · 文档与视口等宽、但视觉缩放 > 1 → 是视口被放大（捏合），布局并没有溢出。
+    private func logLayoutSelfCheck() {
+        let js = """
+        (function(){
+          var d = document.documentElement;
+          var vv = window.visualViewport;
+          return JSON.stringify({
+            sw: d.scrollWidth,
+            cw: d.clientWidth,
+            sh: d.scrollHeight,
+            ch: d.clientHeight,
+            vscale: vv ? Math.round(vv.scale * 1000) / 1000 : null
+          });
+        })()
+        """
+        webView.evaluateJavaScript(js) { result, _ in
+            guard let json = result as? String,
+                  let data = json.data(using: .utf8),
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            let scrollWidth = payload["sw"] as? Int ?? 0
+            let clientWidth = payload["cw"] as? Int ?? 0
+            let scrollHeight = payload["sh"] as? Int ?? 0
+            let clientHeight = payload["ch"] as? Int ?? 0
+            let scaleText = (payload["vscale"] as? Double).map { String(format: "%.2f", $0) } ?? "未知"
+            let overflow = scrollWidth - clientWidth
+            let verdict = overflow > 1
+                ? "横向溢出 \(overflow)px（有横向滚动条）"
+                : "无横向溢出"
+            logInfo("布局自检：文档 \(scrollWidth)×\(scrollHeight) / 视口 \(clientWidth)×\(clientHeight)，视觉缩放 \(scaleText) → \(verdict)")
+        }
     }
 
     /// 打一行启动耗时汇总。四段各自能说明问题：
