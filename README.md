@@ -318,6 +318,9 @@ launchctl bootstrap gui/$(id -u) /tmp/com.kaidiren.dsh.relaunch.plist
   （实测：右键 (48,312) 被配到 (8,368)；「访问模式」下拉被拽到 (12,220)）。
   有些触发器是普通 `button`，既无 `aria-haspopup` 也无 `aria-expanded`（如 composer 里的
   「访问模式，当前：工作区内修改」），只能靠第 2 条。
+  注意 portal 浮层是 `body` 的直接子节点，`scan()` 拿到的是它自己，而 `querySelectorAll`
+  只找后代——所以"认不认它"必须写在元素自身的判断里（`isMenu` 要同时接受 menu 与 dialog），
+  1.0.10 就是因为漏了这一条而整版无效。
   另外 composer 状态栏的「上下文已用 xx%」与会话统计是 `role="dialog"` 的 portal 面板（不是菜单），
   方向是上方 8px + 左对齐。它们和设置/登录那类**模态框**同为 dialog，靠 role 分不开，
   所以判别方式是：解析 `<style>` 文本，找出声明了 `anchor()` 的规则选择器，能匹配上才处理。

@@ -387,7 +387,7 @@ enum AppFlags {
 }
 
 enum Version {
-    static let string = "1.0.10"
+    static let string = "1.0.11"
 }
 
 // MARK: - 信号处理

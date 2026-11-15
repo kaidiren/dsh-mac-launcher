@@ -265,8 +265,13 @@ enum MenuFallback {
     requestAnimationFrame(function () { placeSoon(menu, tries + 1) })
   }
 
+  // portal 出去的浮层是 body 的直接子节点：scan() 拿到的是它自己，
+  // 而 querySelectorAll 只找后代、找不到自己，所以这里必须认得 dialog，
+  // 否则 role=dialog 的面板（上下文用量、会话统计）永远进不了摆放流程。
   function isMenu(node) {
-    return node.nodeType === 1 && node.getAttribute && node.getAttribute('role') === 'menu'
+    if (node.nodeType !== 1 || !node.getAttribute) { return false }
+    var role = node.getAttribute('role')
+    return role === 'menu' || role === 'dialog'
   }
 
   function scan(root) {
