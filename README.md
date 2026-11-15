@@ -309,10 +309,11 @@ launchctl bootstrap gui/$(id -u) /tmp/com.kaidiren.dsh.relaunch.plist
 - DSH 前端的弹层菜单靠 CSS Anchor Positioning 定位（`anchor()` / `position-anchor`），
   Chromium 125 起就支持，而 WebKit 要到 Safari 26 / macOS 26 才有。本应用因此在
   `Sources/MenuFallback.swift` 里带一段兜底：检测到 `CSS.supports('anchor-name: --a')` 为 false
-  时，按触发器的矩形自己算菜单坐标。**没有该兜底的菜单**（例如右键菜单
-  `data-context-menu`，它没有 `aria-expanded` 触发器）仍会错位。
-  兜底依赖前端的 DOM 约定（`role=menu` / `data-anchor-side` / `aria-expanded`），前端改结构后
-  它会静默失配：菜单回到错位，但不会报错。
+  时自己算菜单坐标：下拉菜单按触发器的矩形，**右键菜单**（`data-context-menu`）按
+  `contextmenu` 事件的鼠标坐标 —— 后者没有自己的 `aria-expanded`，若照触发器配对，页面上
+  残留的"已展开"按钮会把菜单拽到别处（实测右键 (48,312) 配到了 (8,368)）。
+  兜底依赖前端的 DOM 约定（`role=menu` / `data-anchor-side` / `data-anchor-align` /
+  `aria-expanded` / `data-context-menu`），前端改结构后它会静默失配：菜单回到错位，但不会报错。
 - 文件上传用 `<input type=file>`（原生文件面板）；拖放上传与剪贴板粘贴图片沿用浏览器行为，
   遇到问题请记录到 `launcher.log` 附近的现象里反馈。
 

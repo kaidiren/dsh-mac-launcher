@@ -56,6 +56,33 @@ enum MenuFallback {
 
   // 多个触发器同时展开时（菜单切换的过渡帧），优先用最近一次真正展开的那个：
   // 菜单是按展开顺序挂到 body 上的，取"最后一个 expanded"会把新菜单摆到旧触发器上。
+  // 右键菜单没有 aria-expanded 触发器。它的锚点是前端在鼠标处插的一个 0 尺寸 fixed span，
+  // 但页面上还可能有其它 0 尺寸 fixed span，靠"最后一个"配对并不可靠（实测会抓错，
+  // 菜单落到 (12,404) 而鼠标在 (48,312)）。所以以 contextmenu 事件坐标为准：
+  // 在 document 的捕获阶段记录，React 的 onContextMenu 随后才处理，坐标一定是本次的。
+  var lastContext = null
+
+  document.addEventListener('contextmenu', function (event) {
+    lastContext = { x: event.clientX, y: event.clientY, at: Date.now() }
+  }, true)
+
+  function pointAt(x, y) {
+    return { left: x, right: x, top: y, bottom: y, width: 0, height: 0 }
+  }
+
+  function contextPoint() {
+    if (lastContext && Date.now() - lastContext.at < 3000) {
+      return pointAt(lastContext.x, lastContext.y)
+    }
+    // 事件没收到时的退路：找 0 尺寸的 fixed span（其 left/top 是普通 CSS，不受 anchor 支持影响）
+    var spans = document.querySelectorAll('span[style*="position: fixed"]')
+    for (var i = spans.length - 1; i >= 0; i--) {
+      var rect = spans[i].getBoundingClientRect()
+      if (rect.width === 0 && rect.height === 0) { return rect }
+    }
+    return null
+  }
+
   function activeTrigger() {
     if (lastTrigger && lastTrigger.isConnected && lastTrigger.getAttribute('aria-expanded') === 'true') {
       return lastTrigger
@@ -76,9 +103,13 @@ enum MenuFallback {
   }
 
   function place(menu) {
-    var trigger = activeTrigger()
-    if (!trigger) { return false }
-    var t = trigger.getBoundingClientRect()
+    // 右键菜单（data-context-menu）必须只认鼠标坐标：它没有自己的 aria-expanded，
+    // 而页面上可能残留别的"已展开"按钮，照触发器配对会把菜单摆到那个按钮旁边
+    // （实测踩过：右键 (48,312)，菜单落到 (12,404)，配到了侧栏某行 (8,368)）。
+    var isContextMenu = menu.hasAttribute('data-context-menu')
+    var trigger = isContextMenu ? null : activeTrigger()
+    var t = isContextMenu ? contextPoint() : (trigger ? trigger.getBoundingClientRect() : contextPoint())
+    if (!t) { return false }
     // 两种菜单并存：前端 Menu 组件带 data-anchor-side/align（“更多”“账号菜单”等），
     // 模型与推理等级那类自绘菜单没有这两个属性，方向写死在 CSS 里（向上、右对齐、间距 8）。
     var hasSide = menu.hasAttribute('data-anchor-side')
