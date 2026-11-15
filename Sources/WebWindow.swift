@@ -98,6 +98,8 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.userContentController.addUserScript(Polyfill.script())
+        // WebKit 尚未实现 CSS Anchor Positioning 时，弹层菜单由这段兜底自己算坐标
+        configuration.userContentController.addUserScript(MenuFallback.script())
         let view = WKWebView(frame: .zero, configuration: configuration)
         prewarmView = view
         view.loadHTMLString("<!doctype html><meta charset=\"utf-8\"><title>DSH</title>", baseURL: nil)
@@ -129,6 +131,8 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         configuration.preferences.isElementFullscreenEnabled = true
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
         configuration.userContentController.addUserScript(Polyfill.script())
+        // WebKit 尚未实现 CSS Anchor Positioning 时，弹层菜单由这段兜底自己算坐标
+        configuration.userContentController.addUserScript(MenuFallback.script())
 
         webView = WebView(frame: NSRect(origin: .zero, size: frame.size), configuration: configuration)
         webView.autoresizingMask = [.width, .height]

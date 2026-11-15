@@ -170,6 +170,7 @@ defaults delete com.kaidiren.dsh-mac-launcher 2>/dev/null
 | `Sources/Config.swift` | 配置解析（环境变量 / 配置文件） |
 | `Sources/Service.swift` | `dsh web` 生命周期：启动、就绪、token 解析、重启、停止 |
 | `Sources/WebWindow.swift` | 窗口 + WKWebView 宿主、认证流程、下载、右键菜单、兼容注入 |
+| `Sources/MenuFallback.swift` | 弹层菜单定位兜底（WebKit 缺 CSS Anchor Positioning 时自己算坐标） |
 | `Sources/MenuBar.swift` | 菜单栏图标与四个动作（打开/刷新/重启/退出） |
 | `Sources/OverlayView.swift` | 启动进度与错误面板 |
 | `Sources/Support.swift` | 日志、端口探测、认证 URL 解析与缓存 |
@@ -204,13 +205,100 @@ defaults delete com.kaidiren.dsh-mac-launcher 2>/dev/null
 **关于面板、菜单都来自运行中的进程**，要让改动可见必须重启启动器进程（退出再打开）；
 直接改盘上的 `Info.plist` 对已经在跑的实例无效。
 
-> 重启时别用"会话里挂个 `sleep && kill && open` 脚本"这种办法：那个脚本属于发起它的
-> 那个会话，而重启动作本身会停掉 dsh web，脚本常在 `open` 之前就被一起收走，表现为
-> "窗口关了却再也起不来"。可靠做法是把延迟动作交给外部执行者（例如 launchd 一次性任务），
-> 或者干脆手动退出再打开。另外也别图省事用 `kill -9` 旧实例：强杀会让服务来不及清理
-> （1.0.3 起 `dsh web` 的输出改为直接写日志文件、不再接管道，原先"管道读端消失导致
-> 它因 EPIPE 直接死"那条已经不存在了）。
+> 具体怎么重启见下一节「重启启动器（让改动生效）」。**不要**在会话里随手挂
+> `sleep && kill && open` 脚本——它会因为连坐而在 `open` 之前消失。
 
+## 重启启动器（让改动生效）
+
+改盘上的二进制或 `Info.plist` **不影响已运行的进程**：菜单项、`--version`、「关于」面板
+都来自进程内存。要让改动可见必须重启启动器；而它退出时会停掉自己拉起的 `dsh web`，
+**正在使用的会话会随之断开**（会话本身在磁盘上，重连后可继续）。
+
+### 两种不可用的写法（都实测踩过）
+
+1. **会话里挂延迟脚本**（`sleep && kill && open &`）：脚本是发起它的那个会话的子孙进程，
+   重启动作会停 `dsh web`，脚本常在执行到 `open` 之前就被一起收走 —— 结果是"窗口关了却
+   再也起不来"。2026-10-10 与 2026-11-15 各有实证，日志都停在 kill 那一行。
+2. **`nohup setsid bash x.sh & disown`**：`setsid` 在 macOS **根本不存在**（那是 Linux 的
+   工具，`which setsid` 输出为空）。整条命令直接失败，而 stdout 早已重定向进 `/dev/null`，
+   于是**完全静默**：终端回显了 `armed`，排上的脚本却一个字节都没跑，连日志文件都不会被
+   创建。2026-11-15 因此空转两次，误判为"脚本被杀"。去掉 `setsid` 只留 `nohup` 也不行，
+   连坐问题照旧。
+
+另外尽量别用 `kill -9`：1.0.3 起 `dsh web` 的输出改为直写日志文件，原先"管道读端消失
+导致 EPIPE"的风险已不存在，但 `SIGTERM` 仍比强杀多一层正常清理。
+
+### 可靠做法：launchd 一次性任务
+
+launchd 的任务不属于任何会话进程树，`dsh web` 停掉不会波及它。三步：
+
+**1. 写脚本 `/tmp/dsh-relaunch.sh`**（`chmod +x`）：
+
+```sh
+#!/bin/bash
+exec >> /tmp/dsh-relaunch-launchd.log 2>&1
+set -x
+date
+sleep 3
+PID=$(lsappinfo info -only pid $(lsappinfo find bundleID=com.kaidiren.dsh-mac-launcher) 2>/dev/null | tr -dc "0-9")
+echo "old_pid=$PID"
+[ -n "$PID" ] && kill -TERM "$PID"
+# 必须等旧实例真的消失再 open：应用有单实例守卫，抢跑会直接激活旧进程
+for i in $(seq 1 30); do
+  sleep 0.5
+  P=$(lsappinfo info -only pid $(lsappinfo find bundleID=com.kaidiren.dsh-mac-launcher) 2>/dev/null | tr -dc "0-9")
+  [ -z "$P" ] && break
+done
+echo "after_kill=[$P]"
+open -a /Applications/DSH.app
+sleep 6
+/Applications/DSH.app/Contents/MacOS/DSHLauncher --version
+lsof -nP -iTCP:3080 -sTCP:LISTEN | head -2
+launchctl bootout gui/$(id -u)/com.kaidiren.dsh.relaunch 2>/dev/null || true
+```
+
+**2. 写 plist `/tmp/com.kaidiren.dsh.relaunch.plist`**：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.kaidiren.dsh.relaunch</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>/tmp/dsh-relaunch.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/tmp/dsh-relaunch-launchd.log</string>
+  <key>StandardErrorPath</key><string>/tmp/dsh-relaunch-launchd.log</string>
+</dict>
+</plist>
+```
+
+**3. 加载任务**：
+
+```sh
+launchctl bootout gui/$(id -u)/com.kaidiren.dsh.relaunch 2>/dev/null
+launchctl bootstrap gui/$(id -u) /tmp/com.kaidiren.dsh.relaunch.plist
+```
+
+在 DSH 会话内执行时 `bootstrap` 需要提权（沙箱内报 `Bootstrap failed: 5: Input/output error`），
+在普通终端里直接跑不需要。
+
+### 判据
+
+- `tail /tmp/dsh-relaunch-launchd.log`：应看到 `old_pid=…` → `after_kill=[]` → `open` 之后的
+  `--version` 与端口两行。**日志文件不存在 = 任务没跑起来**（先查 `which setsid` 这类命令
+  是否真的存在，别和服务连坐混为一谈）。
+- `lsappinfo list | grep -i -A3 kaidiren`：`pid` 应是新值，`bundle path` 指向 `/Applications/DSH.app`。
+- 任务跑完会 `bootout` 自己，之后 `launchctl print gui/$(id -u)/com.kaidiren.dsh.relaunch`
+  报 `Could not find service` **属正常收尾**，不是失败。
+- `~/Library/Logs/DSH/launcher.log` 末尾应有新的「服务就绪 / 界面就绪」两行。
+
+### 实测记录
+
+2026-11-15 11:40（1.0.6 发布）：`bootstrap` → `kill -TERM` 旧实例 87632 → 轮询到空 →
+`open -a /Applications/DSH.app` → 新实例 90173 起来、`dsh web` 90178 就绪、界面就绪 54926
+字符，全程约 5 秒；任务自行 `bootout` 收尾。2026-10-10 那次同样成功（2.33s）。
 ## 已知限制
 
 - 菜单栏图标只在**本应用运行时**存在。退掉应用图标就没了 —— 但服务仍在跑，重新打开应用即可。
@@ -218,6 +306,13 @@ defaults delete com.kaidiren.dsh-mac-launcher 2>/dev/null
   上传下载、WebSocket 长连接），个别 CSS 细节可能有细微差异。
 - 在 macOS 14.4 以下运行时会注入 `AbortSignal.any` / `Promise.withResolvers` / `Promise.try`
   的兼容实现（DSH 前端在关键路径上用了它们且没有 polyfill）。
+- DSH 前端的弹层菜单靠 CSS Anchor Positioning 定位（`anchor()` / `position-anchor`），
+  Chromium 125 起就支持，而 WebKit 要到 Safari 26 / macOS 26 才有。本应用因此在
+  `Sources/MenuFallback.swift` 里带一段兜底：检测到 `CSS.supports('anchor-name: --a')` 为 false
+  时，按触发器的矩形自己算菜单坐标。**没有该兜底的菜单**（例如右键菜单
+  `data-context-menu`，它没有 `aria-expanded` 触发器）仍会错位。
+  兜底依赖前端的 DOM 约定（`role=menu` / `data-anchor-side` / `aria-expanded`），前端改结构后
+  它会静默失配：菜单回到错位，但不会报错。
 - 文件上传用 `<input type=file>`（原生文件面板）；拖放上传与剪贴板粘贴图片沿用浏览器行为，
   遇到问题请记录到 `launcher.log` 附近的现象里反馈。
 
