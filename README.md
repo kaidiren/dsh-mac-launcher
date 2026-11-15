@@ -318,6 +318,12 @@ launchctl bootstrap gui/$(id -u) /tmp/com.kaidiren.dsh.relaunch.plist
   （实测：右键 (48,312) 被配到 (8,368)；「访问模式」下拉被拽到 (12,220)）。
   有些触发器是普通 `button`，既无 `aria-haspopup` 也无 `aria-expanded`（如 composer 里的
   「访问模式，当前：工作区内修改」），只能靠第 2 条。
+  另外 composer 状态栏的「上下文已用 xx%」与会话统计是 `role="dialog"` 的 portal 面板（不是菜单），
+  方向是上方 8px + 左对齐。它们和设置/登录那类**模态框**同为 dialog，靠 role 分不开，
+  所以判别方式是：解析 `<style>` 文本，找出声明了 `anchor()` 的规则选择器，能匹配上才处理。
+  **不能读 CSSOM**（`styleSheets[k].cssRules`）：WebKit 会把它不认识的属性直接丢弃，
+  cssText 里既没有 `anchor()` 也没有 `position-anchor`（实测 201 张表 0 命中，而 `<style>`
+  的 textContent 里有 59 处）。
   **量不出宽高的锚点一律不用**：侧栏里很多操作按钮平时是隐藏的（hover 才显形），
   抓到它们会把菜单摆到窗口角上（实测 (12,4)）；这时宁可保持原样，也不瞎摆。
   兜底依赖前端的 DOM 约定（`role=menu` / `data-anchor-side` / `data-anchor-align` /

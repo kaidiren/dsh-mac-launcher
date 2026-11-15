@@ -30,7 +30,7 @@ enum MenuFallback {
 
   var MARGIN = 12
   var GAP = 4
-  var MENU_SELECTOR = '[role="menu"]'
+  var MENU_SELECTOR = '[role="menu"], [role="dialog"]'
   var TRIGGER_SELECTOR = '[aria-haspopup="menu"]'
   var lastTrigger = null
 
@@ -56,6 +56,53 @@ enum MenuFallback {
 
   // 多个触发器同时展开时（菜单切换的过渡帧），优先用最近一次真正展开的那个：
   // 菜单是按展开顺序挂到 body 上的，取"最后一个 expanded"会把新菜单摆到旧触发器上。
+  // role="dialog" 里混着两种东西：设置面板 / 登录浮层这类**模态框**（居中的，不能碰），
+  // 和上下文用量、会话统计这类**锚定面板**（也是 portal，靠 anchor() 定位）。
+  // 靠 role 分不开，所以直接问样式表：哪些规则声明了 anchor() / position-anchor。
+  // 匹配得上才是锚定面板；模态框的规则里没有这些，自然不会被碰。
+  var anchoredSelectors = null
+
+  // 注意：不能读 CSSOM（styleSheets[k].cssRules）。WebKit 不认识的属性会被 CSSOM **直接丢弃**，
+  // 所以 cssText 里既看不到 anchor() 也看不到 position-anchor（实测 201 张表、0 命中）。
+  // 反而是 <style> 标签的 textContent 保留了源码原文，只能从那里解析选择器。
+  function collectFromText() {
+    anchoredSelectors = []
+    var styles = document.querySelectorAll('style')
+    for (var i = 0; i < styles.length; i++) {
+      var text = styles[i].textContent || ''
+      if (text.indexOf('anchor(') === -1 && text.indexOf('position-anchor') === -1) { continue }
+      var cursor = 0
+      while (true) {
+        var hit = text.indexOf('anchor(', cursor)
+        if (hit === -1) { break }
+        var open = text.lastIndexOf('{', hit)
+        var close = text.lastIndexOf('}', hit)
+        if (open !== -1) {
+          var start = close + 1
+          var selectorText = text.slice(start, open)
+          // 嵌套在 @media / @supports 里时，前缀还带着外层块，取最后一个 '{' 之后的部分
+          if (selectorText.indexOf('{') !== -1) {
+            selectorText = selectorText.slice(selectorText.lastIndexOf('{') + 1)
+          }
+          var parts = selectorText.split(',')
+          for (var k = 0; k < parts.length; k++) {
+            var one = parts[k].trim()
+            if (one && one.indexOf('@') === -1) { anchoredSelectors.push(one) }
+          }
+        }
+        cursor = hit + 7
+      }
+    }
+  }
+
+  function isAnchored(el) {
+    if (anchoredSelectors === null) { collectFromText() }
+    for (var j = 0; j < anchoredSelectors.length; j++) {
+      try { if (el.matches(anchoredSelectors[j])) { return true } } catch (error) { /* 无效选择器，跳过 */ }
+    }
+    return false
+  }
+
   // 右键菜单没有 aria-expanded 触发器。它的锚点是前端在鼠标处插的一个 0 尺寸 fixed span，
   // 但页面上还可能有其它 0 尺寸 fixed span，靠"最后一个"配对并不可靠（实测会抓错，
   // 菜单落到 (12,404) 而鼠标在 (48,312)）。所以以 contextmenu 事件坐标为准：
@@ -125,6 +172,9 @@ enum MenuFallback {
   }
 
   function place(menu) {
+    // 非锚定的 dialog（设置面板、登录浮层等模态框）一律不碰
+    if (menu.getAttribute('role') === 'dialog' && !isAnchored(menu)) { return false }
+
     // 右键菜单（data-context-menu）必须只认鼠标坐标：它没有自己的 aria-expanded，
     // 而页面上可能残留别的"已展开"按钮，照触发器配对会把菜单摆到那个按钮旁边
     // （实测踩过：右键 (48,312)，菜单落到 (12,404)，配到了侧栏某行 (8,368)）。
@@ -145,9 +195,15 @@ enum MenuFallback {
     if (!t || (t.width === 0 && t.height === 0)) { return false }
     // 两种菜单并存：前端 Menu 组件带 data-anchor-side/align（“更多”“账号菜单”等），
     // 模型与推理等级那类自绘菜单没有这两个属性，方向写死在 CSS 里（向上、右对齐、间距 8）。
+    // 三种默认方向：
+    //   · 带 data-anchor-side 的菜单 → 用它自报的方向，间距 4
+    //   · 锚定对话框（上下文用量、会话统计）→ 上方 8px、左对齐
+    //     （CSS 里就是 bottom: anchor(top)+8 / left: anchor(left)）
+    //   · 其余自绘菜单（模型与推理等级）→ 上方 8px、右对齐
     var hasSide = menu.hasAttribute('data-anchor-side')
+    var isDialog = menu.getAttribute('role') === 'dialog'
     var side = hasSide ? menu.getAttribute('data-anchor-side') : 'top'
-    var align = hasSide ? (menu.getAttribute('data-anchor-align') || 'start') : 'end'
+    var align = hasSide ? (menu.getAttribute('data-anchor-align') || 'start') : (isDialog ? 'start' : 'end')
     var gap = hasSide ? GAP : 8
 
     menu.style.position = 'fixed'
