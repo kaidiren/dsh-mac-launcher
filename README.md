@@ -318,6 +318,8 @@ launchctl bootstrap gui/$(id -u) /tmp/com.kaidiren.dsh.relaunch.plist
   （实测：右键 (48,312) 被配到 (8,368)；「访问模式」下拉被拽到 (12,220)）。
   有些触发器是普通 `button`，既无 `aria-haspopup` 也无 `aria-expanded`（如 composer 里的
   「访问模式，当前：工作区内修改」），只能靠第 2 条。
+  **量不出宽高的锚点一律不用**：侧栏里很多操作按钮平时是隐藏的（hover 才显形），
+  抓到它们会把菜单摆到窗口角上（实测 (12,4)）；这时宁可保持原样，也不瞎摆。
   兜底依赖前端的 DOM 约定（`role=menu` / `data-anchor-side` / `data-anchor-align` /
   `aria-expanded` / `data-context-menu`），前端改结构后它会静默失配：菜单回到错位，但不会报错。
 - 文件上传用 `<input type=file>`（原生文件面板）；拖放上传与剪贴板粘贴图片沿用浏览器行为，

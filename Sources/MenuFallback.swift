@@ -103,7 +103,10 @@ enum MenuFallback {
   }
 
   function activeTrigger() {
-    if (lastTrigger && lastTrigger.isConnected && lastTrigger.getAttribute('aria-expanded') === 'true') {
+    // 隐藏的触发器不能当锚点：侧栏里很多操作按钮平时是 display:none / 0 尺寸，
+    // 只有 hover 才显形。抓到它们会把菜单摆到窗口左上角（实测 (12,4)）。
+    if (lastTrigger && lastTrigger.isConnected && lastTrigger.getAttribute('aria-expanded') === 'true'
+        && visible(lastTrigger)) {
       return lastTrigger
     }
     var list = expandedTriggers()
@@ -137,9 +140,9 @@ enum MenuFallback {
         var trigger = activeTrigger()
         t = trigger ? trigger.getBoundingClientRect() : null
       }
-      if (!t) { return false }
     }
-    if (!t) { return false }
+    // 量不出面积的锚点一律不用：宁可保持原样，也别把菜单摆到窗口角上
+    if (!t || (t.width === 0 && t.height === 0)) { return false }
     // 两种菜单并存：前端 Menu 组件带 data-anchor-side/align（“更多”“账号菜单”等），
     // 模型与推理等级那类自绘菜单没有这两个属性，方向写死在 CSS 里（向上、右对齐、间距 8）。
     var hasSide = menu.hasAttribute('data-anchor-side')
