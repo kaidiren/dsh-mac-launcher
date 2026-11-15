@@ -66,6 +66,25 @@ enum MenuFallback {
     lastContext = { x: event.clientX, y: event.clientY, at: Date.now() }
   }, true)
 
+  // 有些菜单的触发器是个普通 button：既没有 aria-haspopup 也没有 aria-expanded
+  // （例：composer 里的「访问模式，当前：工作区内修改」）。这类只能靠"刚点的是谁"来配对。
+  var lastPointer = null
+
+  document.addEventListener('pointerdown', function (event) {
+    var el = event.target
+    if (el && el.nodeType === 1) { lastPointer = { el: el, at: Date.now() } }
+  }, true)
+
+  function pointerTarget() {
+    if (!lastPointer || Date.now() - lastPointer.at > 2000) { return null }
+    var el = lastPointer.el
+    if (!el || !el.isConnected) { return null }
+    // pointerdown 的 target 常是按钮内部的 span/svg，提到最近的按钮再量
+    var host = el.closest ? el.closest('button, [role="button"], [aria-haspopup="menu"]') : null
+    var rect = (host || el).getBoundingClientRect()
+    return (rect.width > 0 || rect.height > 0) ? rect : null
+  }
+
   function pointAt(x, y) {
     return { left: x, right: x, top: y, bottom: y, width: 0, height: 0 }
   }
@@ -107,8 +126,19 @@ enum MenuFallback {
     // 而页面上可能残留别的"已展开"按钮，照触发器配对会把菜单摆到那个按钮旁边
     // （实测踩过：右键 (48,312)，菜单落到 (12,404)，配到了侧栏某行 (8,368)）。
     var isContextMenu = menu.hasAttribute('data-context-menu')
-    var trigger = isContextMenu ? null : activeTrigger()
-    var t = isContextMenu ? contextPoint() : (trigger ? trigger.getBoundingClientRect() : contextPoint())
+    var t = null
+    if (isContextMenu) {
+      t = contextPoint()
+    } else {
+      // 优先"刚点过谁"：页面上可能有别的 aria-expanded=true 按钮（比如侧栏里某个
+      // 已展开的下拉），先查触发器会把它抢走 —— 实测「访问模式」菜单就这样被拽到了 (12,220)。
+      t = pointerTarget()
+      if (!t) {
+        var trigger = activeTrigger()
+        t = trigger ? trigger.getBoundingClientRect() : null
+      }
+      if (!t) { return false }
+    }
     if (!t) { return false }
     // 两种菜单并存：前端 Menu 组件带 data-anchor-side/align（“更多”“账号菜单”等），
     // 模型与推理等级那类自绘菜单没有这两个属性，方向写死在 CSS 里（向上、右对齐、间距 8）。
